@@ -17,6 +17,7 @@
     SKSpriteNode *_cannon;
     SKSpriteNode *_ammoDisplay;
     SKLabelNode *_scoreLabel;
+    SKLabelNode *_pointLabel;
     BOOL _didShoot;
     SKAction *_bounceSound;
     SKAction *_deepExplosionSound;
@@ -118,6 +119,13 @@ static inline CGFloat randomInRange(CGFloat low, CGFloat high)
         _scoreLabel.fontSize = 15;
         [self addChild:_scoreLabel];
         
+        // Setup point multiplier label
+        _pointLabel = [SKLabelNode labelNodeWithFontNamed:@"DIN Alternate"];
+        _pointLabel.position = CGPointMake(15, 30);
+        _pointLabel.horizontalAlignmentMode = SKLabelHorizontalAlignmentModeLeft;
+        _pointLabel.fontSize = 15;
+        [self addChild:_pointLabel];
+        
         // Setup sounds
         _bounceSound        = [SKAction playSoundFileNamed:@"Bounce.caf" waitForCompletion:NO];
         _deepExplosionSound = [SKAction playSoundFileNamed:@"DeepExplosion.caf" waitForCompletion:NO];
@@ -133,8 +141,11 @@ static inline CGFloat randomInRange(CGFloat low, CGFloat high)
         // Set initial values
         self.ammo = 5;
         self.score = 0;
+        self.pointValue = 1;
+
         _gameOver = YES;
         _scoreLabel.hidden = YES;
+        _pointLabel.hidden = YES;
         
         // Load top score
         _userDefaults = [NSUserDefaults standardUserDefaults];
@@ -170,7 +181,9 @@ static inline CGFloat randomInRange(CGFloat low, CGFloat high)
     [self actionForKey:@"SpawnHalo"].speed = 1.0;
     self.ammo = 5;
     self.score = 0;
+    self.pointValue = 1;
     _scoreLabel.hidden = NO;
+    _pointLabel.hidden = NO;
     _gameOver = NO;
     _menu.hidden = YES;
 }
@@ -187,6 +200,12 @@ static inline CGFloat randomInRange(CGFloat low, CGFloat high)
 {
     _score = score;
     _scoreLabel.text = [NSString stringWithFormat:@"Score: %d", score];
+}
+
+-(void)setPointValue:(int)pointValue
+{
+    _pointValue = pointValue;
+    _pointLabel.text = [NSString stringWithFormat:@"Points: x%d", pointValue];
 }
 
 -(void)shoot
@@ -274,6 +293,29 @@ static inline CGFloat randomInRange(CGFloat low, CGFloat high)
     halo.physicsBody.categoryBitMask = kCCHaloCategory;
     halo.physicsBody.collisionBitMask = kCCEdgeCategory;
     halo.physicsBody.contactTestBitMask = kCCBallCategory | kCCShieldCategory | kCCLifeBarCategory | kCCEdgeCategory;
+    
+    int haloCount = 0;
+    for (SKNode *node in _mainLayer.children) {
+        if ([node.name isEqualToString:@"halo"]) {
+            if (![[node.userData valueForKey:@"Bomb"] boolValue])
+                haloCount++;
+        }
+    }
+    
+    if (haloCount == 4) {
+        // Create bomb powerup
+        halo.texture = [SKTexture textureWithImageNamed:@"HaloBomb"];
+        halo.userData = [[NSMutableDictionary alloc] init];
+        [halo.userData setValue:@YES forKey:@"Bomb"];
+
+    } else if (!_gameOver && arc4random_uniform(6) == 0) {
+        // Random point multiplier
+        halo.texture = [SKTexture textureWithImageNamed:@"HaloX"];
+        halo.userData = [[NSMutableDictionary alloc] init];
+        [halo.userData setValue:@YES forKey:@"Multiplier"];
+    }
+    
+    
     [_mainLayer addChild:halo];
 }
 
@@ -292,9 +334,19 @@ static inline CGFloat randomInRange(CGFloat low, CGFloat high)
     
     if (firstBody.categoryBitMask == kCCHaloCategory && secondBody.categoryBitMask == kCCBallCategory) {
         // Collision between halo and ball.
-        self.score++;
+        self.score += self.pointValue;
         [self addExplosion:firstBody.node.position withName:@"HaloExplosion"];
         [self runAction:_explosionSound];
+        
+        if ([[firstBody.node.userData valueForKey:@"Multiplier"] boolValue]) {
+            self.pointValue++;
+        } else if ([[firstBody.node.userData valueForKey:@"Bomb"] boolValue]) {
+            firstBody.node.name = nil;
+            [_mainLayer enumerateChildNodesWithName:@"halo" usingBlock:^(SKNode *node, BOOL *stop) {
+                [self addExplosion:node.position withName:@"HaloExplosion"];
+                [node removeFromParent];
+            }];
+        }
         
         [firstBody.node removeFromParent];
         [secondBody.node removeFromParent];
@@ -303,6 +355,13 @@ static inline CGFloat randomInRange(CGFloat low, CGFloat high)
         // Collision between halo and shield.
         [self addExplosion:firstBody.node.position withName:@"HaloExplosion"];
         [self runAction:_explosionSound];
+        
+        if ([[firstBody.node.userData valueForKey:@"Bomb"] boolValue]) {
+            // Remove all shields.
+            [_mainLayer enumerateChildNodesWithName:@"Bomb" usingBlock:^(SKNode *node, BOOL *stop) {
+                [node removeFromParent];
+            }];
+        }
 
         firstBody.categoryBitMask = 0;
         [firstBody.node removeFromParent];
@@ -322,6 +381,13 @@ static inline CGFloat randomInRange(CGFloat low, CGFloat high)
     }
     if (firstBody.categoryBitMask == kCCBallCategory && secondBody.categoryBitMask == kCCEdgeCategory) {
 //        [self addExplosion:contact.contactPoint withName:@"BounceExplosion"];
+        if ([firstBody.node isKindOfClass:[CCBall class]]) {
+            ((CCBall*)firstBody.node).bounces++;
+            if (((CCBall*)firstBody.node).bounces > 3) {
+                [firstBody.node removeFromParent];
+                self.pointValue = 1;
+            }
+        }
         [self runAction:_bounceSound];
 
     }
@@ -351,7 +417,7 @@ static inline CGFloat randomInRange(CGFloat low, CGFloat high)
     _menu.hidden = NO;
     _gameOver = YES;
     _scoreLabel.hidden = YES;
-
+    _pointLabel.hidden = YES;
 }
 
 -(void)addExplosion:(CGPoint)position withName:(NSString*)name
@@ -380,7 +446,8 @@ static inline CGFloat randomInRange(CGFloat low, CGFloat high)
         
         if (!CGRectContainsPoint(self.frame, node.position)) {
             [node removeFromParent];
-            self.ammo++;
+            self.pointValue = 1;
+            //self.ammo++;
         }
     }];
     

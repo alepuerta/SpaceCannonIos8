@@ -9,13 +9,17 @@
 #import "CCMyScene.h"
 #import "CCMenuy.h"
 #import "CCBall.h"
+#import <AVFoundation/AVFoundation.h>
 
 @implementation CCMyScene
 {
+    AVAudioPlayer *_audioPlayer;
     SKNode *_mainLayer;
     CCMenuy *_menu;
     SKSpriteNode *_cannon;
     SKSpriteNode *_ammoDisplay;
+    SKSpriteNode *_pauseButton;
+    SKSpriteNode *_resumeButton;
     SKLabelNode *_scoreLabel;
     SKLabelNode *_pointLabel;
     BOOL _didShoot;
@@ -141,6 +145,15 @@ static inline CGFloat randomInRange(CGFloat low, CGFloat high)
             [_shieldPool addObject:shield];
         }
         
+        // Setup pause button
+        _pauseButton = [SKSpriteNode spriteNodeWithImageNamed:@"PauseButton"];
+        _pauseButton.position = CGPointMake(self.size.width - 30, 20);
+        [self addChild:_pauseButton];
+        
+        // Setup resume button
+        _resumeButton = [SKSpriteNode spriteNodeWithImageNamed:@"ResumeButton"];
+        _resumeButton.position = CGPointMake(self.size.width * 0.5, self.size.height * 0.5);
+        [self addChild:_resumeButton];
         
         // Setup score display
         _scoreLabel = [SKLabelNode labelNodeWithFontNamed:@"DIN Alternate"];
@@ -178,10 +191,26 @@ static inline CGFloat randomInRange(CGFloat low, CGFloat high)
         _gameOver = YES;
         _scoreLabel.hidden = YES;
         _pointLabel.hidden = YES;
+        _pauseButton.hidden = YES;
+        _resumeButton.hidden = YES;
         
         // Load top score
         _userDefaults = [NSUserDefaults standardUserDefaults];
         _menu.topScore = [_userDefaults integerForKey:kCCKeyTopScore];
+        
+        // Load music
+        NSURL *url = [[NSBundle mainBundle] URLForResource:@"ObservingTheStar" withExtension:@"caf"];
+        NSError *error = nil;
+        _audioPlayer = [[AVAudioPlayer alloc] initWithContentsOfURL:url error:&error];
+        
+        if (!_audioPlayer) {
+            NSLog(@"Error loading audio player: %@", error);
+        } else {
+            _audioPlayer.numberOfLoops = -1;
+            _audioPlayer.volume = 0.8;
+            [_audioPlayer play];
+            _menu.musicPlaying = YES;
+        }
         
     }
     return self;
@@ -212,6 +241,7 @@ static inline CGFloat randomInRange(CGFloat low, CGFloat high)
     self.pointValue = 1;
     _scoreLabel.hidden = NO;
     _pointLabel.hidden = NO;
+    _pauseButton.hidden = NO;
     _gameOver = NO;
     [_menu hide];
 }
@@ -240,9 +270,19 @@ static inline CGFloat randomInRange(CGFloat low, CGFloat high)
 {
     _multiMode = multiMode;
     if (multiMode) {
-        _cannon.texture = [SKTexture textureWithImageNamed:@"GreeNCannon"];
+        _cannon.texture = [SKTexture textureWithImageNamed:@"GreenCannon"];
     } else {
         _cannon.texture = [SKTexture textureWithImageNamed:@"Cannon"];
+    }
+}
+
+-(void)setGamePaused:(BOOL)gamePaused
+{
+    if (!_gameOver) {
+        _gamePaused = gamePaused;
+        _pauseButton.hidden = gamePaused;
+        _resumeButton.hidden = !gamePaused;
+        self.paused = gamePaused;
     }
 }
 
@@ -294,9 +334,12 @@ static inline CGFloat randomInRange(CGFloat low, CGFloat high)
     /* Called when a touch begins */
     
     for (UITouch *touch in touches) {
-        if (!_gameOver) {
-            _didShoot = YES;
+        if (!_gameOver && !self.gamePaused) {
+            if (![_pauseButton containsPoint:[touch locationInNode:_pauseButton.parent]]) {
+                _didShoot = YES;
+            }
         }
+
     }
 }
 
@@ -306,6 +349,26 @@ static inline CGFloat randomInRange(CGFloat low, CGFloat high)
             SKNode *n = [_menu nodeAtPoint:[touch locationInNode:_menu]];
             if ([n.name isEqualToString:@"Play"]) {
                 [self newGame];
+            }
+            if ([n.name isEqualToString:@"Music"]) {
+                _menu.musicPlaying = !_menu.musicPlaying;
+                if (_menu.musicPlaying) {
+                    [_audioPlayer play];
+                } else {
+                    [_audioPlayer stop];
+                }
+            }
+
+        }
+        else if (!_gameOver) {
+            if (self.gamePaused) {
+                if ([_resumeButton containsPoint:[touch locationInNode:_resumeButton.parent]]) {
+                    self.gamePaused = NO;
+                }
+            } else {
+                if ([_pauseButton containsPoint:[touch locationInNode:_pauseButton.parent]]) {
+                    self.gamePaused = YES;
+                }
             }
         }
     }
@@ -519,6 +582,7 @@ static inline CGFloat randomInRange(CGFloat low, CGFloat high)
     _gameOver = YES;
     _scoreLabel.hidden = YES;
     _pointLabel.hidden = YES;
+    _pauseButton.hidden = YES;
     [self runAction:[SKAction waitForDuration:1.0] completion:^{
         [_menu show];
     }];
